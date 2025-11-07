@@ -110,12 +110,6 @@
   </div>
   <div id="hud">Loading...</div>
 
-  <div id="controls-ui">
-    <div id="joy-left"><div class="joy-bg"></div><div class="joy-knob" id="joy-knob">•</div></div>
-    <div id="right-controls">
-      <div class="btn" id="btn-jump">⏫</div>
-    </div>
-  </div>
 <div id="controls-ui">
   <div id="joy-left">
     <div class="joy-bg"></div>
@@ -143,7 +137,6 @@ if (isMobile) controlsUI.style.display = 'flex';
 
 let startTime = null;
 let lastCheckpoint = null;
-const inputState = { jump: false };
 jumpBtn.addEventListener('touchstart', () => inputState.jump = true);
 
 const WORLD_W = 100, WORLD_H = 36, WORLD_D = 100;
