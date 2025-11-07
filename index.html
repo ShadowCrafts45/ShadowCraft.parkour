@@ -116,10 +116,24 @@
       <div class="btn" id="btn-jump">⏫</div>
     </div>
   </div>
-
+<div id="controls-ui">
+  <div id="joy-left">
+    <div class="joy-bg"></div>
+    <div class="joy-knob" id="joy-knob">•</div>
+  </div>
+  <div id="right-controls">
+    <div id="look-area" style="width: 50vw; height: 100vh;"></div>
+    <div id="button-stack">
+      <div class="btn" id="btn-jump">⏫</div>
+    </div>
+  </div>
+</div>
+  
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js';
-
+const inputState = { jump: false, moveX: 0, moveZ: 0 };
+const joystick = { active: false, id: null, startX: 0, startY: 0, dx: 0, dy: 0 };
+  
 const isMobile = /Mobi|Android|iPhone|iPad|iPod|Tablet/i.test(navigator.userAgent);
 const loadBtn = document.getElementById('load-world-button');
 const hud = document.getElementById('hud');
@@ -158,7 +172,59 @@ class VoxelWorld {
   inBounds(x,y,z){ return x>=0 && y>=0 && z>=0 && x<this.w && y<this.h && z<this.d; }
   get(x,y,z){ if(!this.inBounds(x,y,z)) return BLOCK_AIR; return this.blocks[idx(x,y,z)]; }
   set(x,y,z,v){ if(!this.inBounds(x,y,z)) return; this.blocks[idx(x,y,z)] = v; }
+const joy = document.getElementById('joy-left');
+const knob = document.getElementById('joy-knob');
 
+joy.addEventListener('touchstart', e => {
+  const t = e.changedTouches[0];
+  joystick.active = true;
+  joystick.id = t.identifier;
+  joystick.startX = t.clientX;
+  joystick.startY = t.clientY;
+}, { passive: false });
+
+joy.addEventListener('touchmove', e => {
+  for (const t of e.changedTouches) {
+    if (t.identifier === joystick.id) {
+      joystick.dx = t.clientX - joystick.startX;
+      joystick.dy = t.clientY - joystick.startY;
+      const max = 40;
+      const dx = Math.max(-max, Math.min(max, joystick.dx));
+      const dy = Math.max(-max, Math.min(max, joystick.dy));
+      knob.style.transform = `translate(${dx}px, ${dy}px)`;
+      inputState.moveX = dx / max;
+      inputState.moveZ = dy / max;
+    }
+  }
+}, { passive: false });
+
+joy.addEventListener('touchend', e => {
+  for (const t of e.changedTouches) {
+    if (t.identifier === joystick.id) {
+      joystick.active = false;
+      joystick.dx = joystick.dy = 0;
+      inputState.moveX = inputState.moveZ = 0;
+      knob.style.transform = 'translate(-50%, -50%)';
+    }
+  }
+}, { passive: false });
+  const lookArea = document.getElementById('look-area');
+let lastTouch = null;
+
+lookArea.addEventListener('touchstart', e => {
+  lastTouch = e.touches[0];
+}, { passive: false });
+
+lookArea.addEventListener('touchmove', e => {
+  const t = e.touches[0];
+  const dx = t.clientX - lastTouch.clientX;
+  const dy = t.clientY - lastTouch.clientY;
+  player.yaw -= dx * 0.005;
+  player.pitch -= dy * 0.005;
+  player.pitch = clamp(player.pitch, -Math.PI/2 + 0.01, Math.PI/2 - 0.01);
+  lastTouch = t;
+}, { passive: false });
+  
   generateTerrain(){
     for(let x=0;x<this.w;x++){
       for(let z=0;z<this.d;z++){
@@ -236,13 +302,32 @@ light.position.set(1,2,3);
 scene.add(light);
 
 const world = new VoxelWorld(WORLD_W, WORLD_H, WORLD_D, scene);
-
 const player = {
   pos: new THREE.Vector3(50, 12, 50),
   vel: new THREE.Vector3(),
+  yaw: 0,
+  pitch: 0
 };
+  document.addEventListener('click', () => {
+  if (!isMobile) document.body.requestPointerLock?.();
+});
 
+function onMouseMove(e) {
+  player.yaw -= e.movementX * 0.0025;
+  player.pitch -= e.movementY * 0.0025;
+  player.pitch = clamp(player.pitch, -Math.PI/2 + 0.01, Math.PI/2 - 0.01);
+}
+
+document.addEventListener('pointerlockchange', () => {
+  if (document.pointerLockElement === document.body) {
+    window.addEventListener('mousemove', onMouseMove);
+  } else {
+    window.removeEventListener('mousemove', onMouseMove);
+  }
+});
+                               
 function tick(){
+  
   requestAnimationFrame(tick);
 
   if (!startTime) startTime = performance.now();
@@ -260,8 +345,26 @@ function tick(){
   }
 
   player.vel.y -= 0.01; // gravity
-  player.pos.add(player.vel);
+  const speed = 0.1;
+const forward = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
+const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0));
+const move = new THREE.Vector3();
 
+move.addScaledVector(forward, -inputState.moveZ * speed);
+move.addScaledVector(right, inputState.moveX * speed);
+player.pos.add(move);
+  
+  player.pos.add(player.vel);
+const nextPos = player.pos.clone().add(player.vel);
+const bx = Math.floor(nextPos.x);
+const by = Math.floor(nextPos.y);
+const bz = Math.floor(nextPos.z);
+if (world.get(bx, by, bz) === BLOCK_AIR) {
+  player.pos.copy(nextPos);
+} else {
+  player.vel.set(0, 0, 0); // stop movement if blocked
+  }
+  
   const cx = Math.floor(player.pos.x);
   const cy = Math.floor(player.pos.y - 1);
   const cz = Math.floor(player.pos.z);
@@ -269,9 +372,14 @@ function tick(){
     lastCheckpoint = `${cx},${cy},${cz}`;
     hud.innerText += `\n✅ Checkpoint reached!`;
   }
-
-  camera.position.copy(player.pos);
-  camera.position.y += 1.6;
+const dir = new THREE.Vector3(
+  Math.sin(player.yaw),
+  Math.sin(player.pitch),
+  Math.cos(player.yaw)
+);
+camera.position.copy(player.pos).add(new THREE.Vector3(0, 1.6, 0));
+camera.lookAt(player.pos.clone().add(dir));
+  
   camera.lookAt(player.pos.x, player.pos.y + 1.6, player.pos.z + 1);
   renderer.render(scene, camera);
 }
