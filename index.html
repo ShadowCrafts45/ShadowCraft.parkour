@@ -69,6 +69,18 @@
     <button id="load-world-button">▶️ Start Parkour</button>
   </div>
   <div id="hud">Loading...</div>
+  <div id="controls-ui">
+  <div id="joy-left">
+    <div class="joy-bg"></div>
+    <div class="joy-knob" id="joy-knob">•</div>
+  </div>
+  <div id="right-controls">
+    <div id="button-stack">
+      <div class="btn" id="btn-jump">⏫</div>
+    </div>
+  </div>
+  </div>
+  
 <script type="module">
 import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js';
 
@@ -76,7 +88,35 @@ const loadBtn = document.getElementById('load-world-button');
 const hud = document.getElementById('hud');
 let startTime = null;
 let lastCheckpoint = null;
+const inputState = { jump: false };
+document.getElementById('btn-jump').addEventListener('touchstart', () => {
+  inputState.jump = true;
+});
 
+function tick(){
+  requestAnimationFrame(tick);
+  if (!startTime) startTime = performance.now();
+  const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+  hud.innerText = `Parkour Mode\nTime: ${elapsed}s`;
+
+  if (player.pos.y < -10) {
+    player.pos.set(5, 10, 5);
+  }
+
+  if (inputState.jump) {
+    player.vel.y = 0.2;
+    inputState.jump = false;
+  }
+
+  player.pos.add(player.vel);
+  player.vel.y -= 0.01; // gravity
+
+  camera.position.copy(player.pos);
+  camera.position.y += 1.6;
+  camera.lookAt(player.pos.x, player.pos.y + 1.6, player.pos.z + 1);
+  renderer.render(scene, camera);
+}
+  
 loadBtn.addEventListener('click', () => {
   document.getElementById('start-screen').style.display = 'none';
   tick(); // Start game loop
@@ -104,21 +144,31 @@ class VoxelWorld {
   inBounds(x,y,z){ return x>=0 && y>=0 && z>=0 && x<this.w && y<this.h && z<this.d; }
   get(x,y,z){ if(!this.inBounds(x,y,z)) return BLOCK_AIR; return this.blocks[idx(x,y,z)]; }
   set(x,y,z,v){ if(!this.inBounds(x,y,z)) return; this.blocks[idx(x,y,z)] = v; }
-
-  generateTerrain(){
-    for(let i=0;i<60;i++){
-      const x = Math.floor(Math.random()*this.w);
-      const z = Math.floor(Math.random()*this.d);
-      const y = Math.floor(5 + Math.random()*20);
-      this.set(x,y,z,2);
-    }
-    for(let i=0;i<5;i++){
-      const x = Math.floor(Math.random()*this.w);
-      const z = Math.floor(Math.random()*this.d);
-      const y = Math.floor(5 + Math.random()*20);
-      this.set(x,y,z,9);
+generateTerrain(){
+  // Flat platform at spawn
+  for (let x = 4; x <= 6; x++) {
+    for (let z = 4; z <= 6; z++) {
+      this.set(x, 5, z, 2); // stone
     }
   }
+
+  // Parkour platforms
+  for(let i=0;i<60;i++){
+    const x = Math.floor(Math.random()*this.w);
+    const z = Math.floor(Math.random()*this.d);
+    const y = Math.floor(6 + Math.random()*20);
+    this.set(x,y,z,2);
+  }
+
+  // Checkpoints
+  for(let i=0;i<5;i++){
+    const x = Math.floor(Math.random()*this.w);
+    const z = Math.floor(Math.random()*this.d);
+    const y = Math.floor(6 + Math.random()*20);
+    this.set(x,y,z,9); // gold
+  }
+}
+  
 
   updateMeshes(){
     while(this.group.children.length){
