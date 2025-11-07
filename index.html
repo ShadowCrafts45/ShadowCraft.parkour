@@ -383,11 +383,22 @@ camera.lookAt(player.pos.clone().add(dir));
   camera.lookAt(player.pos.x, player.pos.y + 1.6, player.pos.z + 1);
   renderer.render(scene, camera);
 }
-
 loadBtn.addEventListener('click', () => {
   document.getElementById('start-screen').style.display = 'none';
-  tick();
+
+  // ✅ Initialize player and camera here
+  player.pos.set(50, 12, 50);
+  player.vel.set(0, 0, 0);
+  player.yaw = 0;
+  player.pitch = 0;
+
+  camera.position.set(50, 13.6, 50);
+  camera.lookAt(50, 13.6, 51);
+
+  tick(); // ✅ Start game loop
 });
+  
+
 </script>
 </body>
 </html>
