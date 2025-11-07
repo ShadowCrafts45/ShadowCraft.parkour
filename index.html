@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Shadow-craft — Parkour Edition</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <style>
+    html,body {
+      height:100%; margin:0; background:#111; overflow:hidden;
+      font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial;
+      -webkit-user-select:none; user-select:none; touch-action:none;
+    }
+    canvas { display:block; }
+
+    #hud {
+      position:fixed; left:12px; top:12px; z-index:60;
+      background:rgba(0,0,0,0.45); color:#fff;
+      padding:10px 12px; border-radius:8px;
+      font-family: monospace; font-size:13px;
+    }
+
+    #start-screen {
+      position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(-45deg, #0f0f0f, #1a1a1a, #222, #0f0f0f);
+      background-size: 400% 400%;
+      animation: gradientShift 12s ease infinite;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      z-index: 100; color: #fff;
+      font-family: 'Segoe UI', sans-serif; text-align: center;
+    }
+
+    @keyframes gradientShift {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+
+    #game-title {
+      font-size: 48px; color: #ffd36b;
+      text-shadow: 0 0 12px rgba(255,211,107,0.4);
+      animation: floatTitle 4s ease-in-out infinite;
+    }
+
+    @keyframes floatTitle {
+      0% { transform: translateY(0); }
+      50% { transform: translateY(-6px); }
+      100% { transform: translateY(0); }
+    }
+
+    #load-world-button {
+      padding: 10px 18px; font-size: 16px;
+      background: #ffd36b; color: #000;
+      border: none; border-radius: 10px;
+      box-shadow: 0 0 12px rgba(255,211,107,0.4);
+      cursor: pointer; font-weight: bold;
+      transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+
+    #load-world-button:hover {
+      transform: scale(1.08);
+      box-shadow: 0 0 20px rgba(255,211,107,0.6);
+    }
+  </style>
+</head>
+<body>
+  <div id="start-screen">
+    <h1 id="game-title">Shadow-craft: Parkour Edition</h1>
+    <button id="load-world-button">▶️ Start Parkour</button>
+  </div>
+  <div id="hud">Loading...</div>
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js';
+
+const loadBtn = document.getElementById('load-world-button');
+const hud = document.getElementById('hud');
+let startTime = null;
+let lastCheckpoint = null;
+
+loadBtn.addEventListener('click', () => {
+  document.getElementById('start-screen').style.display = 'none';
+  tick(); // Start game loop
+});
+
+const WORLD_W = 100, WORLD_H = 36, WORLD_D = 100;
+const BLOCK_AIR = 0;
+const BLOCKS = {
+  2: { name: 'Stone', color: 0x6e6e6e },
+  9: { name: 'Gold', color: 0xffc300 }
+};
+
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+function idx(x,y,z){ return x + WORLD_W*(z + WORLD_D*y); }
+
+class VoxelWorld {
+  constructor(w,h,d,scene){
+    this.w=w; this.h=h; this.d=d;
+    this.blocks = new Uint8Array(w*h*d);
+    this.group = new THREE.Group();
+    scene.add(this.group);
+    this.generateTerrain();
+    this.updateMeshes();
+  }
+  inBounds(x,y,z){ return x>=0 && y>=0 && z>=0 && x<this.w && y<this.h && z<this.d; }
+  get(x,y,z){ if(!this.inBounds(x,y,z)) return BLOCK_AIR; return this.blocks[idx(x,y,z)]; }
+  set(x,y,z,v){ if(!this.inBounds(x,y,z)) return; this.blocks[idx(x,y,z)] = v; }
+
+  generateTerrain(){
+    for(let i=0;i<60;i++){
+      const x = Math.floor(Math.random()*this.w);
+      const z = Math.floor(Math.random()*this.d);
+      const y = Math.floor(5 + Math.random()*20);
+      this.set(x,y,z,2);
+    }
+    for(let i=0;i<5;i++){
+      const x = Math.floor(Math.random()*this.w);
+      const z = Math.floor(Math.random()*this.d);
+      const y = Math.floor(5 + Math.random()*20);
+      this.set(x,y,z,9);
+    }
+  }
+
+  updateMeshes(){
+    while(this.group.children.length){
+      const c = this.group.children.pop();
+      c.geometry?.dispose?.(); c.material?.dispose?.();
+    }
+    const cubeGeom = new THREE.BoxGeometry(1,1,1);
+    const tmp = new THREE.Matrix4();
+    const lists = {};
+    for(let x=0;x<this.w;x++) for(let y=0;y<this.h;y++) for(let z=0;z<this.d;z++){
+      const bid = this.get(x,y,z);
+      if(bid && bid!==BLOCK_AIR) (lists[bid]=lists[bid]||[]).push({x,y,z});
+    }
+    Object.keys(lists).forEach(k=>{
+      const id = parseInt(k);
+      const arr = lists[k];
+      const mat = new THREE.MeshLambertMaterial({ color: BLOCKS[id].color });
+      const inst = new THREE.InstancedMesh(cubeGeom, mat, arr.length);
+      for(let i=0;i<arr.length;i++){
+        tmp.makeTranslation(arr[i].x+0.5, arr[i].y+0.5, arr[i].z+0.5);
+        inst.setMatrixAt(i,tmp);
+      }
+      this.group.add(inst);
+    });
+  }
+}
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111111);
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+const renderer = new THREE.WebGLRenderer();
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const light = new THREE.DirectionalLight(0xffffff, 1);
+light.position.set(1,2,3);
+scene.add(light);
+
+const world = new VoxelWorld(WORLD_W, WORLD_H, WORLD_D, scene);
+
+const player = {
+  pos: new THREE.Vector3(5, 10, 5),
+  vel: new THREE.Vector3(),
+};
+
+function tick(){
+  requestAnimationFrame(tick);
+  if (!startTime) startTime = performance.now();
+  const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+  hud.innerText = `Parkour Mode\nTime: ${elapsed}s`;
+
+  if (player.pos.y < -10) {
+    player.pos.set(5, 10, 5);
+  }
+
+  const cx = Math.floor(player.pos.x);
+  const cy = Math.floor(player.pos.y - 1);
+  const cz = Math.floor(player.pos.z);
+  if (world.get(cx, cy, cz) === 9 && lastCheckpoint !== `${cx},${cy},${cz}`) {
+    lastCheckpoint = `${cx},${cy},${cz}`;
+    hud.innerText += `\n✅ Checkpoint reached!`;
+  }
+
+  camera.position.copy(player.pos);
+  camera.position.y += 1.6;
+  camera.lookAt(player.pos.x, player.pos.y + 1.6, player.pos.z + 1);
+  renderer.render(scene, camera);
+}
+</script>
+</body>
+</html>
