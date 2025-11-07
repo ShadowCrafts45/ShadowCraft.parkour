@@ -135,8 +135,11 @@ const hud = document.getElementById('hud');
 const jumpBtn = document.getElementById('btn-jump');
 const controlsUI = document.getElementById('controls-ui');
 if (isMobile) controlsUI.style.display = 'flex';
-
-jumpBtn.addEventListener('touchstart', () => inputState.jump = true);
+jumpBtn.addEventListener('touchstart', () => {
+  inputState.jump = true;
+  // This listener is only needed if you want to handle jump differently than in the tick loop.
+  // The logic inside `tick()` now correctly handles mobile jump input by setting inputState.jump to false after a jump.
+});
 
 const WORLD_W = 100, WORLD_H = 36, WORLD_D = 100;
 const BLOCK_AIR = 0;
@@ -284,61 +287,143 @@ const world = new VoxelWorld(WORLD_W, WORLD_H, WORLD_D, scene);
 
 let startTime = null;
 let lastCheckpoint = null;
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' && !isMobile) {
+    inputState.jump = true;
+  }
+  if (e.code === 'KeyW') inputState.moveZ = 1;
+  if (e.code === 'KeyS') inputState.moveZ = -1;
+  if (e.code === 'KeyA') inputState.moveX = -1;
+  if (e.code === 'KeyD') inputState.moveX = 1;
+});
 
+document.addEventListener('keyup', (e) => {
+  if (e.code === 'KeyW' || e.code === 'KeyS') inputState.moveZ = 0;
+  if (e.code === 'KeyA' || e.code === 'KeyD') inputState.moveX = 0;
+});
 function tick(){
+  
   requestAnimationFrame(tick);
 
   if (!startTime) startTime = performance.now();
   const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
   hud.innerText = `Parkour Mode\nTime: ${elapsed}s`;
 
-  if (player.pos.y < -10) {
-    player.pos.set(50, 12, 50);
-    player.vel.set(0, 0, 0);
-  }
-
-  if (inputState.jump && player.pos.y <= 12.01) {
-    player.vel.y = 0.25;
-    inputState.jump = false;
-  }
-
-  player.vel.y -= 0.01;
-
+  // --- Player Movement & Physics ---
   const speed = 0.1;
   const forward = new THREE.Vector3(Math.sin(player.yaw), 0, Math.cos(player.yaw));
   const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0));
-  const move = new THREE.Vector3();
-  move.addScaledVector(forward, -inputState.moveZ * speed);
-  move.addScaledVector(right, inputState.moveX * speed);
+  const horizontalMove = new THREE.Vector3();
 
-  const nextPos = player.pos.clone().add(move).add(player.vel);
-  const bx = Math.floor(nextPos.x);
-  const by = Math.floor(nextPos.y);
-  const bz = Math.floor(nextPos.z);
-  if (world.get(bx, by, bz) === BLOCK_AIR) {
-    player.pos.copy(nextPos);
-  } else {
+  horizontalMove.addScaledVector(forward, -inputState.moveZ * speed);
+  horizontalMove.addScaledVector(right, inputState.moveX * speed);
+  
+  // Apply horizontal movement to velocity (simplified, for arcade feel)
+  // This allows movement in the air without constantly fighting acceleration
+  player.vel.x = horizontalMove.x;
+  player.vel.z = horizontalMove.z;
+
+  // Gravity
+  player.vel.y -= 0.01; 
+  
+  // Max vertical speed for realistic falling
+  player.vel.y = Math.max(player.vel.y, -0.3); 
+
+  // --- Collision Detection and Response ---
+  
+  // Predict next position
+  const nextX = player.pos.x + player.vel.x;
+  const nextY = player.pos.y + player.vel.y;
+  const nextZ = player.pos.z + player.vel.z;
+
+  const playerHeight = 1.8; // Player is about 1.8 units tall (feet at player.pos.y)
+  const stepHeight = 0.1; // Allows stepping up small amounts
+
+  let onGround = false;
+
+  // Collision with ground (Y-axis)
+  const footY = player.pos.y + 0.01; // Slightly above current position to check for block *under* feet
+  const blockBelow = world.get(Math.floor(player.pos.x), Math.floor(footY - playerHeight), Math.floor(player.pos.z));
+  
+  if (player.vel.y < 0) {
+      // Check for landing collision (feet)
+      const feetBlockY = Math.floor(nextY - playerHeight + 0.01);
+      const feetBlock = world.get(Math.floor(nextX), feetBlockY, Math.floor(nextZ));
+
+      if (feetBlock !== BLOCK_AIR) {
+          // Collision detected: set position right on top of the block
+          player.pos.y = feetBlockY + 1.0; 
+          player.vel.y = 0; // Stop vertical movement
+          onGround = true;
+      }
+  }
+
+  // Check for head collision (Y-axis) - only if moving up
+  if (player.vel.y > 0) {
+      const headBlockY = Math.floor(nextY);
+      const headBlock = world.get(Math.floor(nextX), headBlockY, Math.floor(nextZ));
+
+      if (headBlock !== BLOCK_AIR) {
+          player.vel.y = 0; // Stop upward movement
+      }
+  }
+
+  // Simple X/Z-axis collision (check the center of the player's body)
+  const bodyY = Math.floor(player.pos.y - playerHeight / 2);
+  
+  // X-axis collision
+  const nextBlockX = Math.floor(nextX + Math.sign(player.vel.x) * 0.3); // 0.3 is a small offset
+  if (world.get(nextBlockX, bodyY, Math.floor(player.pos.z)) !== BLOCK_AIR) {
+    player.vel.x = 0;
+  }
+  
+  // Z-axis collision
+  const nextBlockZ = Math.floor(nextZ + Math.sign(player.vel.z) * 0.3);
+  if (world.get(Math.floor(player.pos.x), bodyY, nextBlockZ) !== BLOCK_AIR) {
+    player.vel.z = 0;
+  }
+  
+  // Update position after collision checks
+  player.pos.add(player.vel);
+
+  // Jump input check
+  // The original check was `player.pos.y <= 12.01`, which is only for the initial spawn platform height.
+  // The correct check is if the player is currently *on the ground*.
+  if (inputState.jump && onGround) { 
+    player.vel.y = 0.25; // Jump strength
+    inputState.jump = false;
+    // For PC controls, you'll need to update how jump is handled with keyboard events.
+    // For mobile, the `touchstart` listener only sets it to true, so we need to set it to false here.
+  } else if (inputState.jump && !isMobile) {
+      // This allows the PC jump logic to work by only toggling jump once per press
+      inputState.jump = false;
+  }
+  
+  // Respawn
+  if (player.pos.y < -10) {
+    player.pos.set(50, 12, 50); // respawn at spawn platform
     player.vel.set(0, 0, 0);
   }
 
+  // Checkpoint logic (needs a slight adjustment to `cy` to check the block *under* the player)
   const cx = Math.floor(player.pos.x);
-  const cy = Math.floor(player.pos.y - 1);
+  const cy = Math.floor(player.pos.y - playerHeight); // Check block the player is standing on
   const cz = Math.floor(player.pos.z);
   if (world.get(cx, cy, cz) === 9 && lastCheckpoint !== `${cx},${cy},${cz}`) {
     lastCheckpoint = `${cx},${cy},${cz}`;
     hud.innerText += `\n✅ Checkpoint reached!`;
   }
 
+  // Camera update
   const dir = new THREE.Vector3(
-    Math.sin(player.yaw),
+    Math.sin(player.yaw) * Math.cos(player.pitch),
     Math.sin(player.pitch),
-    Math.cos(player.yaw)
+    Math.cos(player.yaw) * Math.cos(player.pitch)
   );
-  camera.position.copy(player.pos).add(new THREE.Vector3(0, 1.6, 0));
-  camera.lookAt(player.pos.clone().add(dir));
+  camera.position.copy(player.pos).add(new THREE.Vector3(0, playerHeight - 0.2, 0)); // Camera slightly above the center of the player
+  camera.lookAt(player.pos.clone().add(new THREE.Vector3(0, playerHeight - 0.2, 0).add(dir.multiplyScalar(5))));
   renderer.render(scene, camera);
-}
-
+  }
 loadBtn.addEventListener('click', () => {
   document.getElementById('start-screen').style.display = 'none';
   player.pos.set(50, 12, 50);
