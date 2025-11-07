@@ -1,530 +1,144 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Shadow-craft — Parkour Edition</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <style>
-    /* Base Styles */
-    html,body{margin:0;height:100%;background:#111;overflow:hidden;font-family:sans-serif}
-    canvas{display:block}
-    
-    /* HUD */
-    #hud{position:fixed;left:12px;top:12px;z-index:60;background:rgba(0,0,0,.45);color:#fff;padding:10px 12px;border-radius:8px;font-family:monospace;font-size:13px;min-width:160px;}
-    
-    /* Notification Box for Checkpoint */
-    #notification{
-        position: fixed;
-        top: 50%;
-        left: 50%;
-        transform: translate(-50%, -50%);
-        background: linear-gradient(135deg, #ffd36b, #ff7e5f);
-        color: #1a1a1a;
-        padding: 15px 30px;
-        border-radius: 12px;
-        font-size: 20px;
-        font-weight: bold;
-        text-shadow: 0 1px 1px rgba(255, 255, 255, 0.4);
-        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
-        opacity: 0;
-        transition: opacity 0.3s ease-in-out;
-        z-index: 90;
-    }
-    
-    /* Start Screen */
-    #start-screen{position:fixed;top:0;left:0;right:0;bottom:0;background:linear-gradient(-45deg,#0f0f0f,#1a1a1a,#222,#0f0f0f);background-size:400% 400%;animation:gradientShift 12s ease infinite;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;color:#fff;font-family:'Segoe UI',sans-serif;text-align:center}
-    @keyframes gradientShift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
-    #game-title{font-size:48px;color:#ffd36b;text-shadow:0 0 12px rgba(255,211,107,.4);animation:floatTitle 4s ease-in-out infinite}
-    @keyframes floatTitle{0%{transform:translateY(0)}50%{transform:translateY(-6px)}100%{transform:translateY(0)}}
-    #load-world-button{padding:10px 18px;font-size:16px;background:#ffd36b;color:#000;border:none;border-radius:10px;box-shadow:0 0 12px rgba(255,211,107,.4);cursor:pointer;font-weight:700;transition:transform .3s ease,box-shadow .3s ease}
-    #load-world-button:hover{transform:scale(1.08);box-shadow:0 0 20px rgba(255,211,107,.6)}
-
-    /* Mobile Controls (Joystick and Jump Button) */
-    #controls-ui{position:fixed;left:0;right:0;bottom:0;display:none;justify-content:space-between;padding:12px;z-index:45}
-    
-    /* Joystick Position Fix: Wrapper moves it slightly up from the bottom */
-    #joy-left-wrapper {
-        display: flex;
-        align-items: flex-end; 
-        margin-left: 12px;
-        margin-bottom: 20px; 
-    }
-    #joy-left{width:140px;height:140px;position:relative}
-    .joy-bg{width:100%;height:100%;background:rgba(255,255,255,.04);border-radius:50%;border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center}
-    .joy-knob{width:48px;height:48px;background:rgba(255,255,255,.14);border-radius:50%;transform:translate(-50%,-50%);position:absolute;left:50%;top:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px}
-    #right-controls{margin-right:12px;display:flex;flex-direction:column;gap:10px;align-items:flex-end}
-    .btn{width:56px;height:56px;background:rgba(255,255,255,.06);border-radius:12px;border:1px solid rgba(255,255,255,.12);color:#fff;font-size:20px;display:flex;align-items:center;justify-content:center;user-select:none}
-  </style>
-</head>
-<body>
-  <div id="start-screen">
-    <h1 id="game-title">Shadow-craft: Parkour Edition</h1>
-    <button id="load-world-button">▶️ Start Parkour</button>
-  </div>
-  <div id="hud">Loading...</div>
-  <div id="notification"></div> <!-- New notification element -->
-  <div id="controls-ui">
-    <div id="joy-left-wrapper"> 
-      <div id="joy-left">
-        <div class="joy-bg"></div>
-        <div class="joy-knob" id="joy-knob">•</div>
-      </div>
-    </div>
-    <div id="right-controls">
-      <!-- Look area covers most of the right side for camera control on touch devices -->
-      <div id="look-area" style="width: 50vw; height: 100vh;"></div>
-      <div id="button-stack">
-        <div class="btn" id="btn-sneak">⬇️</div> <!-- Mobile Sneak Button -->
-        <div class="btn" id="btn-jump">⏫</div>
-      </div>
-    </div>
-  </div>
-<script type="module">
-import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js';
-
-// --- Configuration Constants ---
-const inputState = { jump: false, moveX: 0, moveZ: 0, sneak: false };
-const joystick = { active: false, id: null, startX: 0, startY: 0, dx: 0, dy: 0 };
-const isMobile = /Mobi|Android|iPhone|iPad|iPod|Tablet/i.test(navigator.userAgent);
-
-// Player/Block dimensions
-const P_H = 1.8;      // Standing player height
-const P_H_SNEAK = 1.2; // Sneaking player height
-const P_W = 0.3;      // Player width (for collision: radius from center to edge)
-
-// World Dimensions
-const W_W = 100;
-const W_H = 72;
-const W_D = 100;
-const B_AIR = 0; // Air block ID
-
-// Block types 
-const BLOCKS = {
-    2: { name: 'Stone', color: 0x5a5a5a }, 
-    3: { name: 'Grass', color: 0x1f7a45 }, 
-    4: { name: 'Wood', color: 0x653b1e }, 
-    9: { name: 'Gold Checkpoint', color: 0xffa500 }
-};
-
-// DOM elements
-const hud = document.getElementById('hud');
-const notification = document.getElementById('notification');
-const jumpBtn = document.getElementById('btn-jump');
-const sneakBtn = document.getElementById('btn-sneak');
-const controlsUI = document.getElementById('controls-ui');
-if (isMobile) controlsUI.style.display = 'flex';
-
-let startTime = null;
-let lastCheckpoint = null;
-const initialSpawn = { x: W_W / 2 + 0.5, y: 12, z: W_D / 2 + 0.5 };
-
-
-// Utility functions
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const idx = (x, y, z) => x + W_W * (z + W_D * y);
-
-// --- Voxel World Class (Generation and Rendering remains the same) ---
-class VoxelWorld {
-    constructor(w, h, d, scene) {
-        this.w = w;
-        this.h = h;
-        this.d = d;
-        this.b = new Uint8Array(w * h * d);
-        this.g = new THREE.Group();
-        scene.add(this.g);
-        this.gen();
-        this.upd();
-    }
-    
-    inB(x, y, z) {
-        return x >= 0 && y >= 0 && z >= 0 && x < this.w && y < this.h && z < this.d
-    }
-    
-    get(x, y, z) {
-        if (!this.inB(x, y, z)) return B_AIR;
-        return this.b[idx(x, y, z)];
-    }
-    
-    set(x, y, z, v) {
-        if (!this.inB(x, y, z)) return;
-        this.b[idx(x, y, z)] = v;
-    }
-
-    gen() {
-        const centerX = Math.floor(this.w / 2);
-        const centerZ = Math.floor(this.d / 2);
-        const startY = 10;
-        
-        let currentX = centerX;
-        let currentY = startY;
-        let currentZ = centerZ;
-
-        for (let x = currentX - 2; x <= currentX + 2; x++) {
-            for (let z = currentZ - 2; z <= currentZ + 2; z++) {
-                this.set(x, currentY, z, 2);
-            }
-        }
-        
-        const numPlatforms = 70;
-        const MAX_JUMP_DIST_H = 4;
-        const MAX_JUMP_DIST_V = 2;
-
-        for (let i = 0; i < numPlatforms; i++) {
-            const size = Math.floor(1 + Math.random() * 3);
-            const material = Math.random() < 0.3 ? 4 : 2;
-
-            let dx = Math.floor(1 + Math.random() * MAX_JUMP_DIST_H);
-            let dz = Math.floor(1 + Math.random() * MAX_JUMP_DIST_H);
-            
-            if (Math.random() < 0.5) dx *= -1;
-            if (Math.random() < 0.5) dz *= -1;
-
-            let dy = Math.floor(Math.random() * (2 * MAX_JUMP_DIST_V + 1)) - MAX_JUMP_DIST_V;
-            dy = clamp(dy, -2, MAX_JUMP_DIST_V);
-
-            let nextX = currentX + dx;
-            let nextY = currentY + dy;
-            let nextZ = currentZ + dz;
-
-            nextX = clamp(nextX, 5, this.w - 5 - size);
-            nextY = clamp(nextY, 5, this.h - 5 - size);
-            nextZ = clamp(nextZ, 5, this.d - 5 - size);
-
-            for (let px = 0; px < size; px++) {
-                for (let pz = 0; pz < size; pz++) {
-                    if (this.inB(nextX + px, nextY, nextZ + pz)) {
-                        this.set(nextX + px, nextY, nextZ + pz, material);
-                    }
-                }
-            }
-
-            if (i % 10 === 0 && i !== 0) {
-                this.set(nextX + Math.floor(size / 2), nextY + 1, nextZ + Math.floor(size / 2), 9);
-            }
-
-            currentX = nextX + Math.floor(size / 2);
-            currentY = nextY;
-            currentZ = nextZ + Math.floor(size / 2);
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8" /><title>Parkour</title><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" /><style>html,body{margin:0;height:100%;background:#111;overflow:hidden;font-family:sans-serif}canvas{display:block}#hud{position:fixed;left:12px;top:12px;z-index:60;background:rgba(0,0,0,.45);color:#fff;padding:10px 12px;border-radius:8px;font-family:monospace;font-size:13px;min-width:160px}#notification{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:linear-gradient(135deg,#ffd36b,#ff7e5f);color:#1a1a1a;padding:15px 30px;border-radius:12px;font-size:20px;font-weight:700;text-shadow:0 1px 1px rgba(255,255,255,.4);box-shadow:0 8px 16px rgba(0,0,0,.3);opacity:0;transition:opacity .3s ease-in-out;z-index:90}#start-screen{position:fixed;top:0;left:0;right:0;bottom:0;background:linear-gradient(-45deg,#0f0f0f,#1a1a1a,#222,#0f0f0f);background-size:400% 400%;animation:gradientShift 12s ease infinite;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:100;color:#fff;font-family:'Segoe UI',sans-serif;text-align:center}@keyframes gradientShift{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}#game-title{font-size:48px;color:#ffd36b;text-shadow:0 0 12px rgba(255,211,107,.4);animation:floatTitle 4s ease-in-out infinite}@keyframes floatTitle{0%{transform:translateY(0)}50%{transform:translateY(-6px)}100%{transform:translateY(0)}}#load-world-button{padding:10px 18px;font-size:16px;background:#ffd36b;color:#000;border:none;border-radius:10px;box-shadow:0 0 12px rgba(255,211,107,.4);cursor:pointer;font-weight:700;transition:transform .3s ease,box-shadow .3s ease}#load-world-button:hover{transform:scale(1.08);box-shadow:0 0 20px rgba(255,211,107,.6)}#controls-ui{position:fixed;left:0;right:0;bottom:0;display:none;justify-content:space-between;padding:12px;z-index:45}#joy-left-wrapper{display:flex;align-items:flex-end;margin-left:12px;margin-bottom:20px}#joy-left{width:140px;height:140px;position:relative}.joy-bg{width:100%;height:100%;background:rgba(255,255,255,.04);border-radius:50%;border:1px solid rgba(255,255,255,.08);display:flex;align-items:center;justify-content:center}.joy-knob{width:48px;height:48px;background:rgba(255,255,255,.14);border-radius:50%;transform:translate(-50%,-50%);position:absolute;left:50%;top:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-size:14px}#right-controls{margin-right:12px;display:flex;flex-direction:column;gap:10px;align-items:flex-end}.btn{width:56px;height:56px;background:rgba(255,255,255,.06);border-radius:12px;border:1px solid rgba(255,255,255,.12);color:#fff;font-size:20px;display:flex;align-items:center;justify-content:center;user-select:none}</style></head><body><div id="start-screen"><h1 id="game-title">Shadow-craft: Parkour Edition</h1><button id="load-world-button">▶️ Start Parkour</button></div><div id="hud">Loading...</div><div id="notification"></div><div id="controls-ui"><div id="joy-left-wrapper"><div id="joy-left"><div class="joy-bg"></div><div class="joy-knob" id="joy-knob">•</div></div></div><div id="right-controls"><div id="look-area" style="width: 50vw; height: 100vh;"></div><div id="button-stack"><div class="btn" id="btn-sneak">⬇️</div><div class="btn" id="btn-jump">⏫</div></div></div></div><script type="module">import * as T from 'https://cdn.jsdelivr.net/npm/three@0.154.0/build/three.module.js';
+const iS={jump:!1,moveX:0,moveZ:0,sneak:!1},j={active:!1,id:null,startX:0,startY:0,dx:0,dy:0},isM=/Mobi|Android|iPhone|iPad|iPod|Tablet/i.test(navigator.userAgent);
+const pH=1.8,pHS=1.2,pW=.3,wW=100,wH=72,wD=100,B_A=0,iP={x:wW/2+.5,y:12,z:wD/2+.5};
+const B={2:{name:'Stone',color:0x5a5a5a},3:{name:'Grass',color:0x1f7a45},4:{name:'Wood',color:0x653b1e},9:{name:'Gold Checkpoint',color:0xffa500}};
+const hud=document.getElementById('hud'),note=document.getElementById('notification'),jB=document.getElementById('btn-jump'),sB=document.getElementById('btn-sneak'),cUI=document.getElementById('controls-ui');
+if(isM)cUI.style.display='flex';
+let sT=null,lC=null;
+const clamp=(v,a,b)=>Math.max(a,Math.min(b,v)),idx=(x,y,z)=>x+wW*(z+wD*y);
+class W{
+    constructor(w,h,d,s){this.w=w;this.h=h;this.d=d;this.b=new Uint8Array(w*h*d);this.g=new T.Group();s.add(this.g);this.gen();this.upd();}
+    inB(x,y,z){return x>=0&&y>=0&&z>=0&&x<this.w&&y<this.h&&z<this.d}
+    get(x,y,z){return this.inB(x,y,z)?this.b[idx(x,y,z)]:B_A}
+    set(x,y,z,v){if(this.inB(x,y,z))this.b[idx(x,y,z)]=v}
+    gen(){
+        const cX=Math.floor(this.w/2),cZ=Math.floor(this.d/2),sY=10;
+        let cXn=cX,cYn=sY,cZn=cZ;
+        for(let x=cX-2;x<=cX+2;x++)for(let z=cZ-2;z<=cZ+2;z++)this.set(x,sY,z,2);
+        const nP=70,MAX_H=4,MAX_V=2;
+        for(let i=0;i<nP;i++){
+            const size=Math.floor(1+Math.random()*3);const mat=Math.random()<.3?4:2;
+            let dx=Math.floor(1+Math.random()*MAX_H),dz=Math.floor(1+Math.random()*MAX_H);
+            if(Math.random()<.5)dx*=-1;if(Math.random()<.5)dz*=-1;
+            let dy=clamp(Math.floor(Math.random()*(2*MAX_V+1))-MAX_V,-2,MAX_V);
+            let nX=clamp(cXn+dx,5,this.w-5-size),nY=clamp(cYn+dy,5,this.h-5-size),nZ=clamp(cZn+dz,5,this.d-5-size);
+            for(let px=0;px<size;px++)for(let pz=0;pz<size;pz++)if(this.inB(nX+px,nY,nZ+pz))this.set(nX+px,nY,nZ+pz,mat);
+            if(i%10===0&&i!==0)this.set(nX+Math.floor(size/2),nY+1,nZ+Math.floor(size/2),9);
+            cXn=nX+Math.floor(size/2);cYn=nY;cZn=nZ+Math.floor(size/2);
         }
     }
-
-    upd() {
-        while (this.g.children.length) {
-            const c = this.g.children.pop();
-            c.geometry?.dispose?.();
-            c.material?.dispose?.();
-        }
-
-        const g = new THREE.BoxGeometry(1, 1, 1);
-        const m = new THREE.Matrix4(), l = {};
-
-        for (let x = 0; x < this.w; x++) {
-            for (let y = 0; y < this.h; y++) {
-                for (let z = 0; z < this.d; z++) {
-                    const id = this.get(x, y, z);
-                    if (id && id !== B_AIR) {
-                        (l[id] = l[id] || []).push({ x, y, z });
-                    }
-                }
-            }
-        }
-
-        Object.keys(l).forEach(k => {
-            const id = parseInt(k);
-            const positions = l[k];
-            
-            const mat = new THREE.MeshStandardMaterial({ 
-                color: BLOCKS[id].color,
-                roughness: 0.8,
-                metalness: 0.1
-            });
-            const inst = new THREE.InstancedMesh(g, mat, positions.length);
-
-            for (let i = 0; i < positions.length; i++) {
-                m.makeTranslation(positions[i].x + .5, positions[i].y + .5, positions[i].z + .5);
-                inst.setMatrixAt(i, m);
-            }
+    upd(){
+        while(this.g.children.length){const c=this.g.children.pop();c.geometry?.dispose?.();c.material?.dispose?.();}
+        const g=new T.BoxGeometry(1,1,1),m=new T.Matrix4(),l={};
+        for(let x=0;x<this.w;x++)for(let y=0;y<this.h;y++)for(let z=0;z<this.d;z++){const id=this.get(x,y,z);if(id&&id!==B_A)(l[id]=l[id]||[]).push({x,y,z});}
+        Object.keys(l).forEach(k=>{
+            const id=parseInt(k);const pos=l[k];
+            const mat=new T.MeshStandardMaterial({color:B[id].color,roughness:.8,metalness:.1});
+            const inst=new T.InstancedMesh(g,mat,pos.length);
+            for(let i=0;i<pos.length;i++){m.makeTranslation(pos[i].x+.5,pos[i].y+.5,pos[i].z+.5);inst.setMatrixAt(i,m);}
             this.g.add(inst);
         });
     }
 }
-
-// --- THREE.js Setup ---
-const scene = new THREE.Scene();
-const skyColor = 0x5fa8d3; 
-scene.background = new THREE.Color(skyColor); 
-scene.fog = new THREE.Fog(skyColor, 1, 150); 
-
-// Removed near/far clip values for better compatibility and to discourage zoom behavior
-const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000); 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-document.body.appendChild(renderer.domElement);
-
-const hemiLight = new THREE.HemisphereLight(0xadd8e6, 0x000000, 1.2);
-scene.add(hemiLight);
-
-const light = new THREE.DirectionalLight(0xffffff, 1.5);
-light.position.set(1, 5, 3);
-scene.add(light);
-
-// Initialize World and Player
-const world = new VoxelWorld(W_W, W_H, W_D, scene);
-const player = { 
-    pos: new THREE.Vector3(initialSpawn.x, initialSpawn.y, initialSpawn.z), 
-    vel: new THREE.Vector3(), 
-    yaw: 0, 
-    pitch: 0 
-};
-
-// --- Input Handling (Mobile & Desktop) ---
-
-// Mobile Controls Setup
-const joy = document.getElementById('joy-left');
-const knob = document.getElementById('joy-knob');
-const lookArea = document.getElementById('look-area');
-let lastTouch = null;
-
-jumpBtn.addEventListener('touchstart', () => inputState.jump = true);
-jumpBtn.addEventListener('touchend', () => inputState.jump = false);
-sneakBtn.addEventListener('touchstart', () => inputState.sneak = true);
-sneakBtn.addEventListener('touchend', () => inputState.sneak = false);
-
-// Standard Joystick logic
-function handleJoystickInput(t) {
-    joystick.dx = t.clientX - joystick.startX;
-    joystick.dy = t.clientY - joystick.startY;
-    const max = 40;
-    const dx = clamp(joystick.dx, -max, max);
-    const dy = clamp(joystick.dy, -max, max);
-    knob.style.transform = `translate(${dx}px,${dy}px)`;
-    inputState.moveX = dx / max;
-    inputState.moveZ = dy / max;
+const scene=new T.Scene(),sC=0x5fa8d3;scene.background=new T.Color(sC);scene.fog=new T.Fog(sC,1,150);
+const camera=new T.PerspectiveCamera(75,window.innerWidth/window.innerHeight,.1,1000);
+const renderer=new T.WebGLRenderer({antialias:!0});renderer.setSize(window.innerWidth,window.innerHeight);document.body.appendChild(renderer.domElement);
+scene.add(new T.HemisphereLight(0xadd8e6,0x000000,1.2));scene.add(new T.DirectionalLight(0xffffff,1.5).position.set(1,5,3));
+const V=new W(wW,wH,wD,scene);
+const P={pos:new T.Vector3(iP.x,iP.y,iP.z),vel:new T.Vector3(),yaw:0,pitch:0};
+const joy=document.getElementById('joy-left'),knob=document.getElementById('joy-knob'),lA=document.getElementById('look-area');
+jB.addEventListener('touchstart',()=>iS.jump=!0);jB.addEventListener('touchend',()=>iS.jump=!1);
+sB.addEventListener('touchstart',()=>iS.sneak=!0);sB.addEventListener('touchend',()=>iS.sneak=!1);
+function hJI(t){
+    j.dx=t.clientX-j.startX;j.dy=t.clientY-j.startY;
+    const max=40,dx=clamp(j.dx,-max,max),dy=clamp(j.dy,-max,max);
+    knob.style.transform=`translate(${dx}px,${dy}px)`;iS.moveX=dx/max;iS.moveZ=dy/max;
 }
-
-joy.addEventListener('touchstart', e => {
-    const t = e.changedTouches[0];
-    joystick.active = true;
-    joystick.id = t.identifier;
-    joystick.startX = t.clientX;
-    joystick.startY = t.clientY;
-}, { passive: false });
-
-joy.addEventListener('touchmove', e => {
-    for (const t of e.changedTouches) {
-        if (t.identifier === joystick.id) handleJoystickInput(t);
-    }
-}, { passive: false });
-
-joy.addEventListener('touchend', e => {
-    for (const t of e.changedTouches) {
-        if (t.identifier === joystick.id) {
-            joystick.active = false;
-            joystick.dx = joystick.dy = 0;
-            inputState.moveX = inputState.moveZ = 0;
-            knob.style.transform = 'translate(-50%,-50%)';
-        }
-    }
-}, { passive: false });
-
-
-// Look Controls (Mobile)
-lookArea.addEventListener('touchstart', e => { lastTouch = e.touches[0]; }, { passive: false });
-lookArea.addEventListener('touchmove', e => {
-    const t = e.touches[0];
-    const dx = t.clientX - lastTouch.clientX;
-    const dy = t.clientY - lastTouch.clientY;
-    
-    player.yaw -= dx * 0.005;
-    player.pitch -= dy * 0.005;
-    player.pitch = clamp(player.pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
-    lastTouch = t;
-}, { passive: false });
-
-// Desktop Controls Setup
-if (!isMobile) {
-    document.addEventListener('keydown', e => {
-        if (e.code === 'Space') inputState.jump = true;
-        if (e.code === 'KeyW') inputState.moveZ = 1;
-        if (e.code === 'KeyS') inputState.moveZ = -1;
-        if (e.code === 'KeyA') inputState.moveX = -1;
-        if (e.code === 'KeyD') inputState.moveX = 1;
-        if (e.code === 'ShiftLeft') inputState.sneak = true;
+joy.addEventListener('touchstart',e=>{const t=e.changedTouches[0];j.active=!0;j.id=t.identifier;j.startX=t.clientX;j.startY=t.clientY;},{passive:!1});
+joy.addEventListener('touchmove',e=>{for(const t of e.changedTouches)if(t.identifier===j.id)hJI(t);},{passive:!1});
+joy.addEventListener('touchend',e=>{for(const t of e.changedTouches)if(t.identifier===j.id){j.active=!1;j.dx=j.dy=0;iS.moveX=iS.moveZ=0;knob.style.transform='translate(-50%,-50%)';}},{passive:!1});
+let lT=null;lA.addEventListener('touchstart',e=>{lT=e.touches[0];},{passive:!1});
+lA.addEventListener('touchmove',e=>{
+    const t=e.touches[0],dx=t.clientX-lT.clientX,dy=t.clientY-lT.clientY;
+    P.yaw-=dx*.005;P.pitch-=dy*.005;P.pitch=clamp(P.pitch,-Math.PI/2+.01,Math.PI/2-.01);lT=t;
+},{passive:!1});
+if(!isM){
+    document.addEventListener('keydown',e=>{
+        if(e.code==='Space')iS.jump=!0;
+        if(e.code==='KeyW')iS.moveZ=1;if(e.code==='KeyS')iS.moveZ=-1;
+        if(e.code==='KeyA')iS.moveX=-1;if(e.code==='KeyD')iS.moveX=1;
+        if(e.code==='ShiftLeft')iS.sneak=!0;
     });
-    document.addEventListener('keyup', e => {
-        if (e.code === 'Space') inputState.jump = false;
-        if (e.code === 'KeyW' || e.code === 'KeyS') inputState.moveZ = 0;
-        if (e.code === 'KeyA' || e.code === 'KeyD') inputState.moveX = 0;
-        if (e.code === 'ShiftLeft') inputState.sneak = false;
+    document.addEventListener('keyup',e=>{
+        if(e.code==='Space')iS.jump=!1;
+        if(e.code==='KeyW'||e.code==='KeyS')iS.moveZ=0;
+        if(e.code==='KeyA'||e.code==='KeyD')iS.moveX=0;
+        if(e.code==='ShiftLeft')iS.sneak=!1;
     });
-
-    document.addEventListener('click', () => document.body.requestPointerLock?.());
-
-    function onMouseMove(e) {
-        if (document.pointerLockElement === document.body) {
-            player.yaw -= e.movementX * 0.0025;
-            player.pitch -= e.movementY * 0.0025;
-            player.pitch = clamp(player.pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
-        }
-    }
-    
-    // Disable mouse wheel zooming for consistency
-    document.addEventListener('wheel', e => e.preventDefault(), { passive: false });
-
-    document.addEventListener('pointerlockchange', () => {
-        if (document.pointerLockElement === document.body) window.addEventListener('mousemove', onMouseMove);
-        else window.removeEventListener('mousemove', onMouseMove);
-    });
+    document.addEventListener('click',()=>document.body.requestPointerLock?.());
+    function onMouseMove(e){if(document.pointerLockElement===document.body){P.yaw-=e.movementX*.0025;P.pitch-=e.movementY*.0025;P.pitch=clamp(P.pitch,-Math.PI/2+.01,Math.PI/2-.01);}}
+    document.addEventListener('wheel',e=>e.preventDefault(),{passive:!1});
+    document.addEventListener('pointerlockchange',()=>{if(document.pointerLockElement===document.body)window.addEventListener('mousemove',onMouseMove);else window.removeEventListener('mousemove',onMouseMove);});
 }
-
-// Checkpoint Notification Function
-function showNotification(message) {
-    notification.innerText = message;
-    notification.style.opacity = 1;
-    setTimeout(() => {
-        notification.style.opacity = 0;
-    }, 2000);
+function sN(m){note.innerText=m;note.style.opacity=1;setTimeout(()=>note.style.opacity=0,2000);}
+function cSC(W,px,py,pz,rad){
+    const yC=Math.floor(py),o=rad*.95;
+    const c=[[px+o,pz+o],[px+o,pz-o],[px-o,pz+o],[px-o,pz-o]];
+    for(const[cx,cz]of c)if(W.get(Math.floor(cx),yC,Math.floor(cz))!==B_A)return!0;
+    return!1;
 }
-
-// Helper function to check the 4 corners of the player's base against the blocks below
-function checkSolidCollision(world, px, py, pz, radius) {
-    // py is the Y position being checked (e.g., ground level, hip level, next step level)
-    const yCheck = Math.floor(py);
-    const offset = radius * 0.95; // Small offset to check inside the corners
-
-    const corners = [
-        [px + offset, pz + offset],
-        [px + offset, pz - offset],
-        [px - offset, pz + offset],
-        [px - offset, pz - offset]
-    ];
-
-    for (const [cx, cz] of corners) {
-        if (world.get(Math.floor(cx), yCheck, Math.floor(cz)) !== B_AIR) {
-            return true;
-        }
-    }
-    return false;
-}
-
-// --- Game Loop and Physics ---
-function tick() {
+function tick(){
     requestAnimationFrame(tick);
-    
-    if (!startTime) startTime = performance.now();
-    const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-    
-    // Determine player height and speed based on sneak state
-    const currentPH = inputState.sneak ? P_H_SNEAK : P_H;
-    const baseSpeed = inputState.sneak ? 0.03 : 0.07;
-    
-    hud.innerText = `Parkour Mode\nTime: ${elapsed}s\nStatus: ${inputState.sneak ? 'Sneaking ⬇️' : 'Walking 🏃'}`;
-
-    // Physics Vars
-    const friction = 0.8;
-    const rotationAngle = player.yaw;
-    const forward = new THREE.Vector3(Math.sin(rotationAngle), 0, Math.cos(rotationAngle));
-    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
-    let onGround = false;
-
-    // 1. Horizontal Velocity (Movement)
-    if (inputState.moveX !== 0 || inputState.moveZ !== 0) {
-        const horizontalForce = new THREE.Vector3();
-        horizontalForce.addScaledVector(forward, -inputState.moveZ * baseSpeed);
-        horizontalForce.addScaledVector(right, inputState.moveX * baseSpeed);
-        player.vel.x = horizontalForce.x;
-        player.vel.z = horizontalForce.z;
-    } else {
-        player.vel.x *= friction;
-        player.vel.z *= friction;
-    }
-
-    // 2. Gravity
-    player.vel.y -= 0.008;
-    player.vel.y = Math.max(player.vel.y, -0.3); // Terminal velocity
-
-    // 3. Y-AXIS COLLISION (Vertical) - OVERHAULED FOR UNBREAKABLE FALL PROTECTION
-    let stepY = player.vel.y;
-    const nextGroundY = player.pos.y - currentPH + stepY; 
-
-    if (stepY < 0) { // Falling down
-        // Check for solid blocks at the floor level
-        if (checkSolidCollision(world, player.pos.x, nextGroundY, player.pos.z, P_W)) {
-            const blockUnderneathY = Math.floor(nextGroundY);
-            // Snap player to the top of the block
-            player.pos.y = blockUnderneathY + 1.0 + currentPH;
-            player.vel.y = 0;
-            onGround = true;
-            stepY = 0;
+    if(!sT)sT=performance.now();
+    const e=((performance.now()-sT)/1000).toFixed(1);
+    const cH=iS.sneak?pHS:pH,bS=iS.sneak?.03:.07;
+    hud.innerText=`Parkour Mode\nTime: ${e}s\nStatus: ${iS.sneak?'Sneaking ⬇️':'Walking 🏃'}`;
+    const f=.8,rA=P.yaw,forward=new T.Vector3(Math.sin(rA),0,Math.cos(rA)),right=new T.Vector3().crossVectors(forward,new T.Vector3(0,1,0));
+    let oG=!1;
+    if(iS.moveX!==0||iS.moveZ!==0){
+        const hF=new T.Vector3();hF.addScaledVector(forward,-iS.moveZ*bS);hF.addScaledVector(right,iS.moveX*bS);
+        P.vel.x=hF.x;P.vel.z=hF.z;
+    }else{P.vel.x*=f;P.vel.z*=f;}
+    P.vel.y-=.008;P.vel.y=Math.max(P.vel.y,-.3);
+    let sY=P.vel.y;
+    const nGY=P.pos.y-cH+sY; 
+    if(sY<0){
+        if(cSC(V,P.pos.x,nGY,P.pos.z,pW)){
+            const bUY=Math.floor(nGY);P.pos.y=bUY+1.0+cH;P.vel.y=0;oG=!0;sY=0;
         }
-    } else if (stepY > 0) { // Jumping up (head bump)
-        const nextHeadY = player.pos.y + stepY;
-        // Check 4 corners of the head against blocks above
-        if (checkSolidCollision(world, player.pos.x, nextHeadY, player.pos.z, P_W)) {
-             player.vel.y = 0;
-             stepY = 0;
-        }
+    }else if(sY>0){
+        const nHY=P.pos.y+sY;
+        if(cSC(V,P.pos.x,nHY,P.pos.z,pW)){P.vel.y=0;sY=0;}
     }
-    player.pos.y += stepY;
-
-    // Jump logic
-    if (inputState.jump && onGround) {
-        const jumpPower = inputState.sneak ? 0.15 : 0.25;
-        player.vel.y = jumpPower;
-        if (!isMobile) inputState.jump = false; 
+    P.pos.y+=sY;
+    if(iS.jump&&oG){P.vel.y=iS.sneak?.15:.25;if(!isM)iS.jump=!1;}
+    const fYC=Math.floor(P.pos.y-cH+.01),hYC=Math.floor(P.pos.y-cH+(cH*.5));
+    if(P.vel.x!==0){
+        const nX=P.pos.x+P.vel.x,bX=nX+Math.sign(P.vel.x)*pW;
+        if(cSC(V,bX,fYC,P.pos.z,pW)||cSC(V,bX,hYC,P.pos.z,pW))P.vel.x=0;
     }
-    
-    // 4. X/Z-AXIS COLLISION (Horizontal) - Using 4-corner checks for side collisions too
-
-    const floorYCheck = Math.floor(player.pos.y - currentPH + 0.01);
-    const hipYCheck = Math.floor(player.pos.y - currentPH + (currentPH * 0.5));
-
-    // Check for X collision
-    if (player.vel.x !== 0) {
-        const nextX = player.pos.x + player.vel.x;
-        const blockX = nextX + Math.sign(player.vel.x) * P_W;
-        
-        // Check collision at two vertical levels: floor and hip
-        if (checkSolidCollision(world, blockX, floorYCheck, player.pos.z, P_W) ||
-            checkSolidCollision(world, blockX, hipYCheck, player.pos.z, P_W)) {
-            player.vel.x = 0;
-        }
+    if(P.vel.z!==0){
+        const nZ=P.pos.z+P.vel.z,bZ=nZ+Math.sign(P.vel.z)*pW;
+        if(cSC(V,P.pos.x,fYC,bZ,pW)||cSC(V,P.pos.x,hYC,bZ,pW))P.vel.z=0;
     }
-
-    // Check for Z collision
-    if (player.vel.z !== 0) {
-        const nextZ = player.pos.z + player.vel.z;
-        const blockZ = nextZ + Math.sign(player.vel.z) * P_W;
-
-        // Check collision at two vertical levels: floor and hip
-        if (checkSolidCollision(world, player.pos.x, floorYCheck, blockZ, P_W) ||
-            checkSolidCollision(world, player.pos.x, hipYCheck, blockZ, P_W)) {
-            player.vel.z = 0;
-        }
+    P.pos.x+=P.vel.x;P.pos.z+=P.vel.z;
+    if(P.pos.y<-10){
+        const tS=lC?JSON.parse(lC):iP;P.pos.set(tS.x,tS.y,tS.z);P.vel.set(0,0,0);hud.innerText+='\n❌ Respawned!';
     }
-    
-    player.pos.x += player.vel.x;
-    player.pos.z += player.vel.z;
-    
-    // --- Respawn/Checkpoint Logic ---
-    if (player.pos.y < -10) {
-        // Parse checkpoint from string, or use initialSpawn if null
-        const targetSpawn = lastCheckpoint ? JSON.parse(lastCheckpoint) : initialSpawn;
-
-        player.pos.set(targetSpawn.x, targetSpawn.y, targetSpawn.z);
-        player.vel.set(0, 0, 0);
-        hud.innerText += '\n❌ Respawned!';
+    const cx=Math.floor(P.pos.x),cy=Math.floor(P.pos.y-cH),cz=Math.floor(P.pos.z);
+    if(V.get(cx,cy,cz)===9){
+        const nCP=JSON.stringify({x:cx+.5,y:cy+1.0+cH,z:cz+.5});
+        if(lC!==nCP){lC=nCP;sN('✅ CHECKPOINT SET!');}
     }
-
-    // Checkpoint interaction
-    const cx = Math.floor(player.pos.x);
-    const cy = Math.floor(player.pos.y - currentPH);
-    const cz = Math.floor(player.pos.z);
-    
-    if (world.get(cx, cy, cz) === 9) {
-        // Set checkpoint spawn position 1 block above the gold block
-        const newCheckpoint = JSON.stringify({ x: cx + 0.5, y: cy + 1.0 + currentPH, z: cz + 0.5 });
-        
-        if (lastCheckpoint !== newCheckpoint) {
-            lastCheckpoint = newCheckpoint;
-            shoon.copy(p.pos).add(new THREE.Vector3(0,PH-.2,0));camera.lookAt(p.pos.clone().add(new THREE.Vector3(0,PH-.2,0).add(dir.multiplyScalar(5))));renderer.render(scene,camera);}document.getElementById('load-world-button').addEventListener('click', () => {document.getElementById('start-screen').style.display='none';p.pos.set(iX,12,iZ);p.vel.set(0,0,0);p.yaw=0;p.pitch=0;camera.position.set(p.pos.x,p.pos.y+PH-.2,p.pos.z);camera.lookAt(p.pos.x,p.pos.y+PH-.2,p.pos.z+1);T();});</script></body></html>on.copy(p.pos).add(new THREE.Vector3(0,PH-.2,0));camera.lookAt(p.pos.clone().add(new THREE.Vector3(0,PH-.2,0).add(dir.multiplyScalar(5))));renderer.render(scene,camera);}document.getElementById('load-world-button').addEventListener('click', () => {document.getElementById('start-screen').style.display='none';p.pos.set(iX,12,iZ);p.vel.set(0,0,0);p.yaw=0;p.pitch=0;camera.position.set(p.pos.x,p.pos.y+PH-.2,p.pos.z);camera.lookAt(p.pos.x,p.pos.y+PH-.2,p.pos.z+1);T();});</script></body></html>
+    const dir=new T.Vector3(Math.sin(P.yaw)*Math.cos(P.pitch),Math.sin(P.pitch),Math.cos(P.yaw)*Math.cos(P.pitch));
+    camera.position.copy(P.pos).add(new T.Vector3(0,cH-.2,0)); 
+    camera.lookAt(P.pos.clone().add(new T.Vector3(0,cH-.2,0).add(dir.multiplyScalar(5))));
+    renderer.render(scene,camera);
+}
+document.getElementById('load-world-button').addEventListener('click',()=>{
+    document.getElementById('start-screen').style.display='none';
+    P.pos.set(iP.x,iP.y,iP.z);P.vel.set(0,0,0);P.yaw=0;P.pitch=0;lC=null;
+    camera.position.set(P.pos.x,P.pos.y+pH-.2,P.pos.z);
+    camera.lookAt(P.pos.x,P.pos.y+pH-.2,P.pos.z+1);
+    tick();
+});</script></body></html>on.copy(p.pos).add(new THREE.Vector3(0,PH-.2,0));camera.lookAt(p.pos.clone().add(new THREE.Vector3(0,PH-.2,0).add(dir.multiplyScalar(5))));renderer.render(scene,camera);}document.getElementById('load-world-button').addEventListener('click', () => {document.getElementById('start-screen').style.display='none';p.pos.set(iX,12,iZ);p.vel.set(0,0,0);p.yaw=0;p.pitch=0;camera.position.set(p.pos.x,p.pos.y+PH-.2,p.pos.z);camera.lookAt(p.pos.x,p.pos.y+PH-.2,p.pos.z+1);T();});</script></body></html>on.copy(p.pos).add(new THREE.Vector3(0,PH-.2,0));camera.lookAt(p.pos.clone().add(new THREE.Vector3(0,PH-.2,0).add(dir.multiplyScalar(5))));renderer.render(scene,camera);}document.getElementById('load-world-button').addEventListener('click', () => {document.getElementById('start-screen').style.display='none';p.pos.set(iX,12,iZ);p.vel.set(0,0,0);p.yaw=0;p.pitch=0;camera.position.set(p.pos.x,p.pos.y+PH-.2,p.pos.z);camera.lookAt(p.pos.x,p.pos.y+PH-.2,p.pos.z+1);T();});</script></body></html>
